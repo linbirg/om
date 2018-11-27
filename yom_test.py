@@ -57,8 +57,7 @@ class TestCaseYOM(unittest.TestCase):
 
     def get_conn(self):
         # return dbutil.get_connection('itl_old_db')
-        conn = cx.connect('%s/%s@%s' % ('gesssigex', 'Oracle123!',
-                                        '180.2.30.75:1521/sgeint'))
+        conn = cx.connect('%s/%s@%s' % ('user', 'passwd', 'ip:1521/sid'))
         return conn
 
     def test_find(self):
