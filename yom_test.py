@@ -56,7 +56,6 @@ class TestCaseYOM(unittest.TestCase):
         self.conn.close()
 
     def get_conn(self):
-        # return dbutil.get_connection('itl_old_db')
         conn = cx.connect('%s/%s@%s' % ('user', 'passwd', 'ip:1521/sid'))
         return conn
 
@@ -122,8 +121,7 @@ class TestCaseYOM(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_find_one_exception(self):
-        # 查询条件为多个值时，函数返回第一条数据。具体那一条，则无法确定，可能oracle不能实现或者排序的不同，导致不同。
-        # 所以在有多个条件时，不要使用这个函数。
+        # 使用find_one查询结果多条是会跑异常
         one = Client.find_one(seat='0001')
         print(one)
 
@@ -145,6 +143,23 @@ class TestCaseYOM(unittest.TestCase):
         aCust.delete()
         self.conn.commit()
         self.assertIsNone(Cust.find_one('0004'))
+
+    def test_find_where(self):
+        clients = Client.find_where(where='f_id>:id', id='001')
+        self.assertEqual(len(clients), 3)
+        # args = {id: '001'}
+        # clients = Client.find_where('f_id>:id', **args)
+        # self.assertEqual(len(clients), 3)
+
+        clients = Client.find_where('f_id>:id', id='002')
+        self.assertEqual(len(clients), 2)
+
+    def test_count_where(self):
+        cnt = Client.count_where(where='f_id>:id', id='001')
+        self.assertEqual(cnt, 3)
+
+        cnt = Client.count_where('f_id>:id', id='002')
+        self.assertEqual(cnt, 2)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@
 # 这里主要参考后面一种，并改为同步的oracle版本，后续考虑异步版本。
 
 import logging
+import collections
 
 
 class Field(object):
@@ -49,9 +50,14 @@ class DoubleField(Field):
                  name=None,
                  primary_key=False,
                  default=None,
-                 size=(18, 0)):
+                 size=(18, 2)):
         super(DoubleField, self).__init__(name, 'NUMBER(%d,%d)' % size,
                                           primary_key, default)
+
+
+class IntField(DoubleField):
+    def __init__(self, name=None, primary_key=False, default=None, size=18):
+        super(IntField, self).__init__(name, primary_key, default, (size, 0))
 
 
 # 其它字段略，一个道理，一个模式
@@ -96,9 +102,10 @@ class ModelMetaClass(type):
                     pkeys.append(k)
                 else:
                     fields.append(k)
+        # 不做必须有主键的检查，一方面可以方便定义空的类，另一方面可能确实存在没有主键的表。
         # 保证了必须有一个主键
-        if len(pkeys) == 0:
-            raise RuntimeError("Primary key not found")
+        # if len(pkeys) == 0:
+        #     raise RuntimeError("Primary key not found")
         # 这里的目的是去除类属性，为什么要去除呢，因为我想知道的信息已经记录下来了。
         # 去除之后，就访问不到类属性了
         # 记录到了mappings,fields，pkeys等变量里，而我们实例化的时候，如
@@ -143,28 +150,12 @@ class ModelMetaClass(type):
             tableName, __get_sql_where_con_pairs_list(pkeys))
         attrs['__count__'] = 'select count(1) from %s ' % tableName
 
-        # primaryKey_name = mappings.get(primaryKey).name or primaryKey
-        # attrs['__select__'] = "select %s,%s from %s " % (
-        #     primaryKey_name, ','.join(
-        #         map(lambda f: '%s' % (mappings.get(f).name or f),
-        #             fields)), tableName)
-        # attrs['__update__'] = "update %s set %s where %s=:%s" % (tableName, ', '.join(
-        #     map(
-        #         lambda f: '%s=:%s' % (mappings.get(f).name or f, mappings.get(f).name or f),
-        #         fields)), primaryKey_name, primaryKey_name)
-        # attrs['__insert__'] = "insert into %s (%s,%s) values (:%s,%s)" % (
-        #     tableName, primaryKey_name, ','.join(
-        #         map(lambda f: '%s' % (mappings.get(f).name or f), fields)),
-        #     primaryKey_name, ','.join(
-        #         map(lambda k: ':%s' % (mappings.get(k).name or k), fields)))
-        # attrs['__delete__'] = "delete from %s where %s=:%s " % (
-        #     tableName, primaryKey_name, primaryKey_name)
         return type.__new__(cls, name, bases, attrs)
 
 
-# 让Model继承dict,主要是为了具备dict所有的功能，如get方法
+# 让Model继承dict,主要是为了具备dict所有的功能，如get方法,使用有序dict，顺序按照定义顺序
 # metaclass指定了Model类的元类为ModelMetaClass
-class Model(dict, metaclass=ModelMetaClass):
+class Model(collections.OrderedDict, metaclass=ModelMetaClass):
     db_conn = None
 
     def __init__(self, **kw):
@@ -212,33 +203,21 @@ class Model(dict, metaclass=ModelMetaClass):
                             self.__get_args__(self.__mappings__.keys()))
 
     def delete(self):
-        # args = []
-        # args.append(self[self.__primaryKey__])
-        # args = {
-        #     self.get_primaryKey_name():
-        #     self.getValueOrDefault(self.__primaryKey__)
-        # }
-        # print(self.__delete__)
         return self.execute(self.__delete__, self.__get_args__(self.__pKeys__))
 
     def update(self):
-        # args = {}
-        # for key in kw:
-        #     if key not in self.__fields__:
-        #         raise RuntimeError("field not found")
-        # for key in self.__fields__:
-        #     if key in kw:
-        #         args[key] = kw[key]
-        #         # args.append(kw[key])
-        #     else:
-        #         args[key] = getattr(self, key, None)
-        #         # args.append(getattr(self, key, None))
-
-        # args.append(getattr(self, self.__primaryKey__))
-        # args = self.__get_args__(self.__fields__)
-
         return self.execute(self.__update__,
                             self.__get_args__(self.__mappings__.keys()))
+
+    @staticmethod
+    def __make_dict__(cursor):
+        # 列名全部小写，保持跟书写习惯一致。取列也已小写方式读取。
+        cols = [d[0].lower() for d in cursor.description]
+
+        def createrow(*args):
+            return dict(zip(cols, args))
+
+        return createrow
 
     @classmethod
     def select(cls, sql, args, size=None):
@@ -247,6 +226,7 @@ class Model(dict, metaclass=ModelMetaClass):
             # 用参数替换而非字符串拼接可以防止sql注入
             print("select sql:", sql, " args:", args)
             cur.execute(sql, args)
+            cur.rowfactory = cls.__make_dict__(cur)
             if size:
                 rs = cur.fetchmany(size)
             else:
@@ -268,6 +248,7 @@ class Model(dict, metaclass=ModelMetaClass):
             raise e
         return affected
 
+    # @deprecated cx_oracle返回值由tuple改为dict，不再需要tuple到map的转换。
     @classmethod
     def tuple_2_map(cls, tp):
         obj = {}
@@ -281,6 +262,15 @@ class Model(dict, metaclass=ModelMetaClass):
             obj[f] = tp[i + j]
 
         return obj
+
+    @classmethod
+    def row_mapper(cls, row):
+        # 将数据库查出的以字段名显示的row（dict），转换为Model的对象
+        data = dict()
+        for k, f in cls.__mappings__.items():
+            data[k] = row[f.name.lower()]  # lower
+
+        return cls(**data)
 
     @classmethod
     def __get_key_name__(cls, key):
@@ -328,7 +318,7 @@ class Model(dict, metaclass=ModelMetaClass):
             args = {cls.__get_key_name__(cls.__pKeys__[0]): pk}
             keys.append(cls.__pKeys__[0])
 
-        if pks is not None or len(pks) > 0:
+        if pks is not None and len(pks) > 0:
             for k, v in pks.items():
                 args[cls.__get_key_name__(k)] = v
                 keys.append(k)
@@ -343,7 +333,19 @@ class Model(dict, metaclass=ModelMetaClass):
         if len(rs) == 0:
             return None
         # print(rs)
-        return [cls(**cls.tuple_2_map(r)) for r in rs]  # 返回的是一个实例对象引用
+        return [cls(**cls.row_mapper(r)) for r in rs]  # 返回的是一个实例对象引用
+
+    @classmethod
+    def find_where(cls, where=None, **args):
+        sql = [cls.__select__]
+        if where:
+            sql.append('where')
+            sql.append(where)
+
+        rs = cls.select(' '.join(sql), args)
+        if len(rs) == 0:
+            return None
+        return [cls(**cls.row_mapper(r)) for r in rs]  # 返回的是一个实例对象引用
 
     @classmethod
     def find_one(cls, pk=None, **pks):
@@ -366,7 +368,7 @@ class Model(dict, metaclass=ModelMetaClass):
 
         # __count__ = 'select count(1) from %s ' % cls.__table__
 
-        if pks is not None or len(pks) > 0:
+        if pks is not None and len(pks) > 0:
             for k, v in pks.items():
                 args[cls.__get_key_name__(k)] = v
                 keys.append(k)
@@ -379,4 +381,14 @@ class Model(dict, metaclass=ModelMetaClass):
                                  cls.__get_sql_where_con_pairs_list(keys)),
                 args,
                 size=1)
-        return rs[0][0]
+        return list(rs[0].values())[0]
+
+    @classmethod
+    def count_where(cls, where=None, **args):
+        sql = [cls.__count__]
+        if where:
+            sql.append('where')
+            sql.append(where)
+
+        rs = cls.select(' '.join(sql), args, size=1)
+        return list(rs[0].values())[0]
