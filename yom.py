@@ -20,14 +20,19 @@ import collections
 
 
 class Field(object):
-    def __init__(self, name, column_type, primary_key, default):
+    def __init__(self, name, column_type, primary_key, default, desc=''):
         self.name = name  # 字段名
         self.column_type = column_type  # 字段数据类型
         self.primary_key = primary_key  # 是否是主键
         self.default = default  # 有无默认值
+        self.description = desc  # 描述
 
     def __str__(self):
         return '<%s:%s>' % (self.__class__.__name__, self.name)
+
+    def get_ddl(self):
+        return '%s %s %s' % (self.name, self.column_type,
+                             'not null' if self.primary_key else ' ')
 
 
 class StringField(Field):
@@ -35,14 +40,21 @@ class StringField(Field):
                  name=None,
                  primary_key=False,
                  default=None,
-                 ddl='varchar2(255)'):
-        super(StringField, self).__init__(name, ddl, primary_key, default)
+                 ddl='varchar2(255)',
+                 desc=''):
+        super(StringField, self).__init__(name, ddl, primary_key, default,
+                                          desc)
 
 
 class CharField(Field):
-    def __init__(self, name=None, primary_key=False, default=None, size=1):
+    def __init__(self,
+                 name=None,
+                 primary_key=False,
+                 default=None,
+                 size=1,
+                 desc=''):
         super(CharField, self).__init__(name, 'CHAR(%d)' % size, primary_key,
-                                        default)
+                                        default, desc)
 
 
 class DoubleField(Field):
@@ -50,14 +62,32 @@ class DoubleField(Field):
                  name=None,
                  primary_key=False,
                  default=None,
-                 size=(18, 2)):
+                 size=(18, 2),
+                 desc=''):
         super(DoubleField, self).__init__(name, 'NUMBER(%d,%d)' % size,
-                                          primary_key, default)
+                                          primary_key, default, desc)
 
 
 class IntField(DoubleField):
-    def __init__(self, name=None, primary_key=False, default=None, size=18):
-        super(IntField, self).__init__(name, primary_key, default, (size, 0))
+    def __init__(self,
+                 name=None,
+                 primary_key=False,
+                 default=None,
+                 size=18,
+                 desc=''):
+        super(IntField, self).__init__(name, primary_key, default, (size, 0),
+                                       desc)
+
+
+class TimeStampField(Field):
+    def __init__(self,
+                 name=None,
+                 primary_key=False,
+                 default=None,
+                 column_type='TIMESTAMP(6)',
+                 desc=''):
+        super(TimeStampField, self).__init__(name, column_type, primary_key,
+                                             default, desc)
 
 
 # 其它字段略，一个道理，一个模式
@@ -392,3 +422,33 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
 
         rs = cls.select(' '.join(sql), args, size=1)
         return list(rs[0].values())[0]
+
+
+# 用于数据表的创建等DDL操作
+class DDL(object):
+    def __init__(self, model, constraint):
+        self.model = model
+        self.constraint = constraint
+
+    def create_table(self):
+        fields = self.__get_fields__(self.model.__mappings__)
+        primary_keys = self.__get_cols__(self.model.__pKeys__,
+                                         self.model.__mappings__)
+        __ddl_create_table = 'create table %s (%s,CONSTRAINT %s PRIMARY KEY(%s) )' % (
+            self.model.__table__, fields, self.constraint, primary_keys)
+        print(__ddl_create_table)
+        self.model.execute(__ddl_create_table, {})
+
+    def drop_table(self):
+        try:
+            __ddl_drop_table__ = 'drop table %s' % self.model.__table__
+            self.model.execute(__ddl_drop_table__, {})
+        except Exception as e:
+            print('drop table error:', e)
+
+    def __get_fields__(self, mappings):
+        return ','.join([f.get_ddl() for f in mappings.values()])
+
+    def __get_cols__(self, keys, mappings):
+        return ','.join(
+            map(lambda k: '%s' % (mappings.get(k).name or k), keys))
