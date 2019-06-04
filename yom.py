@@ -1,5 +1,5 @@
 # !/usr/bin/python3
-# -*- coding:utf8 -*-
+# -*- coding:utf-8 -*-
 # Author: yizr
 
 # 1.orm 是什么
@@ -15,8 +15,12 @@
 # 这里参照了简书上的两种实现，分别为https://www.jianshu.com/p/042abf8918fc与https://www.jianshu.com/p/ac8a9bb57ec3。
 # 这里主要参考后面一种，并改为同步的oracle版本，后续考虑异步版本。
 
-import logging
-import collections
+import logging as logger
+# from . import logger
+
+import datetime
+
+# import collections
 
 
 class Field(object):
@@ -31,8 +35,22 @@ class Field(object):
         return '<%s:%s>' % (self.__class__.__name__, self.name)
 
     def get_ddl(self):
-        return '%s %s %s' % (self.name, self.column_type,
-                             'not null' if self.primary_key else ' ')
+        __ddl__ = '%s %s %s' % (self.name, self.column_type,
+                                'not null' if self.primary_key else ' ')
+
+        val = self.__get_defualt__()
+
+        if val:
+            __ddl__ = '%s %s' % (__ddl__, 'default ' + str(val))
+
+        return __ddl__
+
+    def __get_defualt__(self):
+        if self.default is not None:
+            value = self.default() if callable(self.default) else self.default
+            return value
+
+        return None
 
 
 class StringField(Field):
@@ -42,8 +60,7 @@ class StringField(Field):
                  default=None,
                  ddl='varchar2(255)',
                  desc=''):
-        super(StringField, self).__init__(name, ddl, primary_key, default,
-                                          desc)
+        super().__init__(name, ddl, primary_key, default, desc)
 
 
 class CharField(Field):
@@ -53,30 +70,35 @@ class CharField(Field):
                  default=None,
                  size=1,
                  desc=''):
-        super(CharField, self).__init__(name, 'CHAR(%d)' % size, primary_key,
-                                        default, desc)
+        super().__init__(name, 'CHAR(%d)' % size, primary_key, default, desc)
+        self.size = size
+
+    def rpad(self, val, padding=b' ', db_internal_encoding='gbk'):
+        if val is None:
+            val = ''
+        return val.encode(db_internal_encoding).ljust(
+            self.size, padding).decode(db_internal_encoding)
 
 
 class DoubleField(Field):
     def __init__(self,
                  name=None,
                  primary_key=False,
-                 default=None,
+                 default=0.0,
                  size=(18, 2),
                  desc=''):
-        super(DoubleField, self).__init__(name, 'NUMBER(%d,%d)' % size,
-                                          primary_key, default, desc)
+        super().__init__(name, 'NUMBER(%d,%d)' % size, primary_key, default,
+                         desc)
 
 
 class IntField(DoubleField):
     def __init__(self,
                  name=None,
                  primary_key=False,
-                 default=None,
+                 default=0,
                  size=18,
                  desc=''):
-        super(IntField, self).__init__(name, primary_key, default, (size, 0),
-                                       desc)
+        super().__init__(name, primary_key, default, (size, 0), desc)
 
 
 class TimeStampField(Field):
@@ -86,8 +108,7 @@ class TimeStampField(Field):
                  default=None,
                  column_type='TIMESTAMP(6)',
                  desc=''):
-        super(TimeStampField, self).__init__(name, column_type, primary_key,
-                                             default, desc)
+        super().__init__(name, column_type, primary_key, default, desc)
 
 
 # 其它字段略，一个道理，一个模式
@@ -107,7 +128,7 @@ class ModelMetaClass(type):
             return type.__new__(cls, name, bases, attrs)
         # 取出表名，默认与类的名字相同
         tableName = attrs.get('__table__', None) or name
-        logging.info('found model: %s (table: %s)' % (name, tableName))
+        # logger.LOG_TRACE('found model: %s (table: %s)' % (name, tableName))
         # 用于存储所有的字段，以及字段值
         mappings = dict()
         # 仅用来存储非主键意外的其它字段，而且只存key
@@ -125,7 +146,6 @@ class ModelMetaClass(type):
                 mappings[k] = v
                 if v.primary_key:
                     # if primaryKey:
-                    #     # TODO 考虑改为可以多个key
                     #     raise RuntimeError(
                     #         "Douplicate primary key for field :%s" % key)
                     # primaryKey = k
@@ -160,11 +180,15 @@ class ModelMetaClass(type):
 
         def __get_sql_param_pairs_list(cols):
             return ','.join(
-                map(lambda k: '%s=:%s' % (mappings.get(k).name or k, mappings.get(k).name or k), cols))
+                map(
+                    lambda k: '%s=:%s' % (mappings.get(k).name or k,
+                                          mappings.get(k).name or k), cols))
 
         def __get_sql_where_con_pairs_list(cols):
             return ' and '.join(
-                map(lambda k: '%s=:%s' % (mappings.get(k).name or k, mappings.get(k).name or k), cols))
+                map(
+                    lambda k: '%s=:%s' % (mappings.get(k).name or k,
+                                          mappings.get(k).name or k), cols))
 
         # 只是为了Model编写方便，放在元类里和放在Model里都可以
         attrs['__select__'] = "select %s,%s from %s " % (
@@ -183,13 +207,23 @@ class ModelMetaClass(type):
         return type.__new__(cls, name, bases, attrs)
 
 
-# 让Model继承dict,主要是为了具备dict所有的功能，如get方法,使用有序dict，顺序按照定义顺序
+# 让Model继承dict,主要是为了具备dict所有的功能，如get方法
 # metaclass指定了Model类的元类为ModelMetaClass
-class Model(collections.OrderedDict, metaclass=ModelMetaClass):
+class Model(dict, metaclass=ModelMetaClass):
     db_conn = None
+    __db_internal_encoding = 'gbk'
+
+    @classmethod
+    def set_db_conn(cls, db_conn):
+        if cls.db_conn:
+            pass
+            # logger.LOG_DEBUG('db_conn已经赋值[uuid:%d] new uuid[%d]' %
+            #                  (id(cls.db_conn), id(db_conn)))
+
+        cls.db_conn = db_conn
 
     def __init__(self, **kw):
-        super(Model, self).__init__(**kw)
+        super().__init__(**kw)
 
     # 实现__getattr__与__setattr__方法，可以使引用属性像引用普通字段一样  如self['id']
     def __getattr__(self, key):
@@ -201,6 +235,16 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
     def __setattr__(self, key, value):
         self[key] = value
 
+    def __missing__(self, key):
+        field = self.__mappings__[key]
+        value = None
+        if field.default is not None:
+            value = field.default() if callable(
+                field.default) else field.default
+
+        setattr(self, key, value)
+        return value
+
     # 貌似有点多次一举
     def getValue(self, key):
         value = getattr(self, key, None)
@@ -209,13 +253,14 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
     # 取默认值，上面字段类不是有一个默认值属性嘛，默认值也可以是函数
     def getValueOrDefault(self, key):
         value = getattr(self, key, None)
+        field = self.__mappings__[key]
         if value is None:
-            field = self.__mappings__[key]
             if field.default is not None:
                 value = field.default() if callable(
                     field.default) else field.default
-                # setattr(self, key, value) # get函数不写属性。
-        return value
+                # setattr(self, key, value)  # TODO get函数不写属性,确定是否需要set。
+
+        return self.padding_val_if_neccesary(value, key)
 
     def __get_args__(self, keys):
         args = {}
@@ -229,6 +274,8 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
 
     # 下面 self.__mappings__,self.__insert__等变量据是根据对应表的字段不同，而动态创建
     def save(self):
+        self.created_at = datetime.datetime.now()
+        self.updated_at = datetime.datetime.now()
         return self.execute(self.__insert__,
                             self.__get_args__(self.__mappings__.keys()))
 
@@ -236,11 +283,12 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
         return self.execute(self.__delete__, self.__get_args__(self.__pKeys__))
 
     def update(self):
+        self.updated_at = datetime.datetime.now()
         return self.execute(self.__update__,
                             self.__get_args__(self.__mappings__.keys()))
 
     @staticmethod
-    def __make_dict__(cursor):
+    def __func_create_row__(cursor):
         # 列名全部小写，保持跟书写习惯一致。取列也已小写方式读取。
         cols = [d[0].lower() for d in cursor.description]
 
@@ -249,31 +297,41 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
 
         return createrow
 
-    @classmethod
-    def select(cls, sql, args, size=None):
+    @staticmethod
+    def select(cls, db_conn, sql, args=None, size=None):
         try:
-            cur = cls.db_conn.cursor()
+            cur = db_conn.cursor()
+            if args is None:
+                args = {}
             # 用参数替换而非字符串拼接可以防止sql注入
-            print("select sql:", sql, " args:", args)
+            # logger.LOG_DEBUG("select sql:%s args:%s" % (sql, str(args)))
+            # logger.LOG_DEBUG("db_uuid:%d select sql:%s args:%s" %
+            #                  (id(cls.db_conn), sql, args))
+            logger.info("db_uuid:%d select sql:%s args:%s" %
+                        (id(db_conn), sql, args))
+
             cur.execute(sql, args)
-            cur.rowfactory = cls.__make_dict__(cur)
+            cur.rowfactory = cls.__func_create_row__(cur)
             if size:
                 rs = cur.fetchmany(size)
             else:
                 rs = cur.fetchall()
-            cur.close()
+            # cur.close()  # TODO 先去掉close，不确定是否会引起不commit
         except BaseException as e:
             raise e
         return rs
 
     @classmethod
-    def execute(cls, sql, args):
+    def execute(cls, db_conn, sql, args=None):
         try:
-            cur = cls.db_conn.cursor()
-            print("execute sql:", sql, "args:", args)
+            cur = db_conn.cursor()
+            if args is None:
+                args = {}
+            # logger.LOG_DEBUG("db_uuid:%d execute sql:%s args:%s" %
+            #                  (id(cls.db_conn), sql, args))
             cur.execute(sql, args)
             affected = cur.rowcount
-            cur.close()
+            # cur.close()  # TODO 先去掉close，不确定是否会引起不commit
         except BaseException as e:
             raise e
         return affected
@@ -303,6 +361,16 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
         return cls(**data)
 
     @classmethod
+    def padding_val_if_neccesary(cls, val, key):
+        field = cls.__mappings__[key]
+        if not isinstance(field, CharField):
+            return val
+
+        return field.rpad(val,
+                          padding=b' ',
+                          db_internal_encoding=cls.__db_internal_encoding)
+
+    @classmethod
     def __get_key_name__(cls, key):
         if key not in cls.__mappings__:
             raise RuntimeError("key not found")
@@ -316,21 +384,18 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
 
     @classmethod
     def __get_sql_cols_list(cls, cols, spliter=','):
-        # return spliter.join(
-        #     map(lambda k: '%s' % (cls.__mappings__.get(k).name or k), cols))
         return cls.__join__('%s', cols)
 
     @classmethod
     def __get_sql_params_list(cls, cols):
-        # return ','.join(
-        #     map(lambda k: ':%s' % (cls.__mappings__.get(k).name or k), cols))
         return cls.__join__(':%s', cols)
 
     @classmethod
     def __get_sql_where_con_pairs_list(cls, cols):
         return ' and '.join(
-            map(lambda k: '%s=:%s' % (cls.__get_key_name__(k), cls.__get_key_name__(k)),
-                cols))
+            map(
+                lambda k: '%s=:%s' % (cls.__get_key_name__(k),
+                                      cls.__get_key_name__(k)), cols))
 
     # 类方法
     @classmethod
@@ -345,42 +410,41 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
         keys = []
         args = {}
         if pk is not None:
-            args = {cls.__get_key_name__(cls.__pKeys__[0]): pk}
+            args = {
+                cls.__get_key_name__(cls.__pKeys__[0]):
+                cls.padding_val_if_neccesary(pk, cls.__pKeys__[0])
+            }
             keys.append(cls.__pKeys__[0])
 
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
-                args[cls.__get_key_name__(k)] = v
+                args[cls.__get_key_name__(k)] = cls.padding_val_if_neccesary(
+                    v, k)
                 keys.append(k)
 
-        if len(keys) == 0:
-            rs = cls.select(cls.__select__, args)
-        else:
-            rs = cls.select(
-                '%s where %s' % (cls.__select__,
-                                 cls.__get_sql_where_con_pairs_list(keys)),
-                args)
-        if len(rs) == 0:
-            return None
-        # print(rs)
-        return [cls(**cls.row_mapper(r)) for r in rs]  # 返回的是一个实例对象引用
+        where = None
+        if len(keys) > 0:
+            where = cls.__get_sql_where_con_pairs_list(keys)
+
+        return cls.find_where(where, **args)
 
     @classmethod
     def find_where(cls, where=None, **args):
+        # 此函数不会做padding等不全操作
         sql = [cls.__select__]
         if where:
             sql.append('where')
             sql.append(where)
 
         rs = cls.select(' '.join(sql), args)
-        if len(rs) == 0:
-            return None
+        # if len(rs) == 0:
+        #     return None
         return [cls(**cls.row_mapper(r)) for r in rs]  # 返回的是一个实例对象引用
 
     @classmethod
     def find_one(cls, pk=None, **pks):
         rets = cls.find(pk, **pks)
-        if rets is None:
+        if rets is None or len(rets) == 0:
             return None
 
         if len(rets) > 1:
@@ -392,6 +456,10 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
         return cls.find()
 
     @classmethod
+    def select_page(cls, fromIndex, toIndex, **pks):
+        pass
+
+    @classmethod
     def count(cls, **pks):
         args = {}
         keys = []
@@ -400,21 +468,20 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
 
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
-                args[cls.__get_key_name__(k)] = v
+                args[cls.__get_key_name__(k)] = cls.padding_val_if_neccesary(
+                    v, k)
                 keys.append(k)
 
-        if len(keys) == 0:
-            rs = cls.select(cls.__count__, args, size=1)
-        else:
-            rs = cls.select(
-                '%s where %s' % (cls.__count__,
-                                 cls.__get_sql_where_con_pairs_list(keys)),
-                args,
-                size=1)
-        return list(rs[0].values())[0]
+        where = None
+
+        if len(keys) > 0:
+            where = cls.__get_sql_where_con_pairs_list(keys)
+
+        return cls.count_where(where, **args)
 
     @classmethod
     def count_where(cls, where=None, **args):
+        # 此函数不会也无法做padding等不全操作
         sql = [cls.__count__]
         if where:
             sql.append('where')
@@ -424,31 +491,6 @@ class Model(collections.OrderedDict, metaclass=ModelMetaClass):
         return list(rs[0].values())[0]
 
 
-# 用于数据表的创建等DDL操作
-class DDL(object):
-    def __init__(self, model, constraint):
-        self.model = model
-        self.constraint = constraint
-
-    def create_table(self):
-        fields = self.__get_fields__(self.model.__mappings__)
-        primary_keys = self.__get_cols__(self.model.__pKeys__,
-                                         self.model.__mappings__)
-        __ddl_create_table = 'create table %s (%s,CONSTRAINT %s PRIMARY KEY(%s) )' % (
-            self.model.__table__, fields, self.constraint, primary_keys)
-        print(__ddl_create_table)
-        self.model.execute(__ddl_create_table, {})
-
-    def drop_table(self):
-        try:
-            __ddl_drop_table__ = 'drop table %s' % self.model.__table__
-            self.model.execute(__ddl_drop_table__, {})
-        except Exception as e:
-            print('drop table error:', e)
-
-    def __get_fields__(self, mappings):
-        return ','.join([f.get_ddl() for f in mappings.values()])
-
-    def __get_cols__(self, keys, mappings):
-        return ','.join(
-            map(lambda k: '%s' % (mappings.get(k).name or k), keys))
+class Session(object):
+    def __init__(self, *args, **kwargs):
+        return super().__init__(*args, **kwargs)
