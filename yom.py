@@ -210,17 +210,7 @@ class ModelMetaClass(type):
 # 让Model继承dict,主要是为了具备dict所有的功能，如get方法
 # metaclass指定了Model类的元类为ModelMetaClass
 class Model(dict, metaclass=ModelMetaClass):
-    db_conn = None
     __db_internal_encoding = 'gbk'
-
-    @classmethod
-    def set_db_conn(cls, db_conn):
-        if cls.db_conn:
-            pass
-            # logger.LOG_DEBUG('db_conn已经赋值[uuid:%d] new uuid[%d]' %
-            #                  (id(cls.db_conn), id(db_conn)))
-
-        cls.db_conn = db_conn
 
     def __init__(self, **kw):
         super().__init__(**kw)
@@ -272,85 +262,6 @@ class Model(dict, metaclass=ModelMetaClass):
 
         return args
 
-    # 下面 self.__mappings__,self.__insert__等变量据是根据对应表的字段不同，而动态创建
-    def save(self):
-        self.created_at = datetime.datetime.now()
-        self.updated_at = datetime.datetime.now()
-        return self.execute(self.__insert__,
-                            self.__get_args__(self.__mappings__.keys()))
-
-    def delete(self):
-        return self.execute(self.__delete__, self.__get_args__(self.__pKeys__))
-
-    def update(self):
-        self.updated_at = datetime.datetime.now()
-        return self.execute(self.__update__,
-                            self.__get_args__(self.__mappings__.keys()))
-
-    @staticmethod
-    def __func_create_row__(cursor):
-        # 列名全部小写，保持跟书写习惯一致。取列也已小写方式读取。
-        cols = [d[0].lower() for d in cursor.description]
-
-        def createrow(*args):
-            return dict(zip(cols, args))
-
-        return createrow
-
-    @staticmethod
-    def select(cls, db_conn, sql, args=None, size=None):
-        try:
-            cur = db_conn.cursor()
-            if args is None:
-                args = {}
-            # 用参数替换而非字符串拼接可以防止sql注入
-            # logger.LOG_DEBUG("select sql:%s args:%s" % (sql, str(args)))
-            # logger.LOG_DEBUG("db_uuid:%d select sql:%s args:%s" %
-            #                  (id(cls.db_conn), sql, args))
-            logger.info("db_uuid:%d select sql:%s args:%s" %
-                        (id(db_conn), sql, args))
-
-            cur.execute(sql, args)
-            cur.rowfactory = cls.__func_create_row__(cur)
-            if size:
-                rs = cur.fetchmany(size)
-            else:
-                rs = cur.fetchall()
-            # cur.close()  # TODO 先去掉close，不确定是否会引起不commit
-        except BaseException as e:
-            raise e
-        return rs
-
-    @classmethod
-    def execute(cls, db_conn, sql, args=None):
-        try:
-            cur = db_conn.cursor()
-            if args is None:
-                args = {}
-            # logger.LOG_DEBUG("db_uuid:%d execute sql:%s args:%s" %
-            #                  (id(cls.db_conn), sql, args))
-            cur.execute(sql, args)
-            affected = cur.rowcount
-            # cur.close()  # TODO 先去掉close，不确定是否会引起不commit
-        except BaseException as e:
-            raise e
-        return affected
-
-    # @deprecated cx_oracle返回值由tuple改为dict，不再需要tuple到map的转换。
-    @classmethod
-    def tuple_2_map(cls, tp):
-        obj = {}
-        for i in range(len(cls.__pKeys__)):
-            # 基于select时候，key都是按顺序排在前面，参考attrs['__select__']。
-            obj[cls.__pKeys__[i]] = tp[i]
-
-        j = len(cls.__pKeys__)
-        for i in range(len(cls.__fields__)):
-            f = cls.__fields__[i]
-            obj[f] = tp[i + j]
-
-        return obj
-
     @classmethod
     def row_mapper(cls, row):
         # 将数据库查出的以字段名显示的row（dict），转换为Model的对象
@@ -383,7 +294,7 @@ class Model(dict, metaclass=ModelMetaClass):
             map(lambda k: format % (cls.__get_key_name__(k)), cols))
 
     @classmethod
-    def __get_sql_cols_list(cls, cols, spliter=','):
+    def get_sql_cols_list(cls, cols, spliter=','):
         return cls.__join__('%s', cols)
 
     @classmethod
@@ -391,15 +302,131 @@ class Model(dict, metaclass=ModelMetaClass):
         return cls.__join__(':%s', cols)
 
     @classmethod
-    def __get_sql_where_con_pairs_list(cls, cols):
+    def get_sql_where_con_pairs_list(cls, cols):
         return ' and '.join(
             map(
                 lambda k: '%s=:%s' % (cls.__get_key_name__(k),
                                       cls.__get_key_name__(k)), cols))
 
-    # 类方法
-    @classmethod
-    def find(cls, pk=None, **pks):
+
+class Dao(object):
+    def __init__(self, db_conn, model):
+        assert db_conn
+        assert model
+        self._conn = db_conn
+        self._model = model
+
+    # def commit(self):
+    #     self._conn.commit()
+
+    # def rollback(self):
+    #     self._conn.rollback()
+
+    @staticmethod
+    def __func_create_row__(cursor):
+        # 列名全部小写，保持跟书写习惯一致。取列也已小写方式读取。
+        cols = [d[0].lower() for d in cursor.description]
+
+        def createrow(*args):
+            return dict(zip(cols, args))
+
+        return createrow
+
+    def select(self, sql, args=None, db_conn=None, size=None):
+        _conn = db_conn if db_conn else self._conn
+        cur = _conn.cursor()
+        if args is None:
+            args = {}
+        # 用参数替换而非字符串拼接可以防止sql注入
+        # logger.LOG_DEBUG("select sql:%s args:%s" % (sql, str(args)))
+        # logger.LOG_DEBUG("db_uuid:%d select sql:%s args:%s" %
+        #                  (id(cls.db_conn), sql, args))
+        logger.info("db_uuid:%d select sql:%s args:%s" %
+                    (id(_conn), sql, args))
+
+        cur.execute(sql, args)
+        cur.rowfactory = self.__func_create_row__(cur)
+        if size:
+            rs = cur.fetchmany(size)
+        else:
+            rs = cur.fetchall()
+
+        return rs
+
+    # def row_to_obj(row, klass):
+    #     return klass(**klass.row_mapper(row))
+
+    def execute(self, sql, args=None, db_conn=None):
+        _conn = db_conn if db_conn else self._conn
+        cur = _conn.cursor()
+        if args is None:
+            args = {}
+        # logger.LOG_DEBUG("db_uuid:%d execute sql:%s args:%s" %
+        #                  (id(cls.db_conn), sql, args))
+        cur.execute(sql, args)
+        affected = cur.rowcount
+
+        return affected
+
+    def _raw_to_obj(self, raw):
+        return self._model(**self._model.row_mapper(raw))
+
+    def find_where(self, where=None, **args):
+        # 此函数不会做padding等不全操作
+        sql = [self._model.__select__]
+        if where:
+            sql.append('where')
+            sql.append(where)
+
+        rs = self.select(' '.join(sql), args)
+        # if len(rs) == 0:
+        #     return None
+        return [self._raw_to_obj(r) for r in rs]  # 返回的是一个实例对象引用
+
+    def select_page(self, where=None,order_by=None, first=1, last=10, **args):
+        # 这个SQL参考了
+        #  http://www.oracle.com/technetwork/issue-archive/2006/06-sep/o56asktom-086197.html
+        #  以及
+        #  http://stackoverflow.com/questions/11680364/oracle-faster-paging-query
+        # String searchQuery_rn____ = String.format(
+        # 		"select %s, rownum rn____ from (%s) ", sql_allColumnString,
+        # 		originalQuerySQL);
+        # String paginationSearchQuery = "select " + this.sql_allColumnString
+        # 		+ " from ( " + searchQuery_rn____
+        # 		+ " ) where rn____ >= ? and rownum <= ?"
+        all_columns = self._model.__pKeys__ + self._model.__fields__
+        all_columns_str = self._model.get_sql_cols_list(all_columns)
+        where_str = ' where ' + where if where else ''
+        order_by_str = 'order by ' + order_by if order_by else ''
+        original_sql = '{0} {1} {2}'.format(self._model.__select__, where_str,order_by_str) 
+        search_qry_rn__ = 'select %s,rownum rn____ from (%s)' % (
+            all_columns_str, original_sql)
+
+        pagination_qry_sql = 'select %s from (%s) where rn____ >= :first and rownum <= :last' % (
+            all_columns_str, search_qry_rn__)
+
+        pag_args = {**args, 'first': first, 'last': last}
+
+        rs = self.select(pagination_qry_sql, pag_args)
+
+        return [self._raw_to_obj(r) for r in rs]
+    
+    def find_page(self,order_by=None, first=1, last=10,  **pks):
+        '''与select_page的区别是不需要写where条件，只需要写查找等式。'''
+        keys = []
+        args = {}
+        if len(pks) > 0:
+            for k, v in pks.items():
+                args[self._model.__get_key_name__(
+                    k)] = self._model.padding_val_if_neccesary(v, k)
+                keys.append(k)
+
+        where = None
+        if len(keys) > 0:
+            where = self._model.get_sql_where_con_pairs_list(keys)
+        return self.select_page(where=where,order_by=order_by,first=first,last=last,**args)
+
+    def find(self, pk=None, **pks):
         # 如果只有1个主键，可以find('ag(T+D)')或者find(id='ag(T+D)')，
         # 如果有多个key，必须使用find(id='ag(T+D)',market='02')(假设market也是主键)
 
@@ -411,86 +438,110 @@ class Model(dict, metaclass=ModelMetaClass):
         args = {}
         if pk is not None:
             args = {
-                cls.__get_key_name__(cls.__pKeys__[0]):
-                cls.padding_val_if_neccesary(pk, cls.__pKeys__[0])
+                self._model.__get_key_name__(self._model.__pKeys__[0]):
+                self._model.padding_val_if_neccesary(pk,
+                                                     self._model.__pKeys__[0])
             }
-            keys.append(cls.__pKeys__[0])
+            keys.append(self._model.__pKeys__[0])
 
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
-                args[cls.__get_key_name__(k)] = cls.padding_val_if_neccesary(
-                    v, k)
+                args[self._model.__get_key_name__(
+                    k)] = self._model.padding_val_if_neccesary(v, k)
                 keys.append(k)
 
         where = None
         if len(keys) > 0:
-            where = cls.__get_sql_where_con_pairs_list(keys)
+            where = self._model.get_sql_where_con_pairs_list(keys)
 
-        return cls.find_where(where, **args)
+        return self.find_where(where, **args)
 
-    @classmethod
-    def find_where(cls, where=None, **args):
-        # 此函数不会做padding等不全操作
-        sql = [cls.__select__]
-        if where:
-            sql.append('where')
-            sql.append(where)
-
-        rs = cls.select(' '.join(sql), args)
-        # if len(rs) == 0:
-        #     return None
-        return [cls(**cls.row_mapper(r)) for r in rs]  # 返回的是一个实例对象引用
-
-    @classmethod
-    def find_one(cls, pk=None, **pks):
-        rets = cls.find(pk, **pks)
+    def find_one(self, pk=None, **pks):
+        '''返回一条数据，如果没有则返回None，多条数据会抛异常.'''
+        rets = self.find(pk, **pks)
         if rets is None or len(rets) == 0:
             return None
 
         if len(rets) > 1:
             raise RuntimeError("find_one：应该返回一条数据，但是返回了多条数据。")
+
         return rets[0]
+    
+    def find_one_with_lock(self, nowait=False,time_out=5,**pks):
+        assert isinstance(time_out,int)
 
-    @classmethod
-    def find_all(cls):
-        return cls.find()
+        if len(pks) <= 0:
+            raise RuntimeError("find_one_with_lock：参数不能为空.")
 
-    @classmethod
-    def select_page(cls, fromIndex, toIndex, **pks):
-        pass
+        keys = []
+        args = {}
+        
+        for k, v in pks.items():
+            args[self._model.__get_key_name__(
+                k)] = self._model.padding_val_if_neccesary(v, k)
+            keys.append(k)
 
-    @classmethod
-    def count(cls, **pks):
+        where = ''
+        if len(keys) > 0:
+            where = ' where '+ self._model.get_sql_where_con_pairs_list(keys)
+        wait_sql = 'nowait' if nowait else 'wait {0}'.format(time_out)
+        for_update_sql = 'for update {0}'.format(wait_sql)
+        _lock_sql = '{0} {1} {2}'.format(self._model.__select__,where,for_update_sql)
+        rs = self.select(_lock_sql,args)
+
+        if len(rs) > 1:
+            raise RuntimeError("find_one_with_lock：应该返回一条数据，但是返回了多条数据。")
+        
+        if rs is None or len(rs) == 0:
+            return None
+        
+        return self._raw_to_obj(rs[0]) 
+
+
+
+    def find_all(self):
+        return self.find()
+
+    def count_where(self, where=None, **args):
+        # 此函数不会也无法做padding等不全操作
+        sql = [self._model.__count__]
+        if where:
+            sql.append('where')
+            sql.append(where)
+
+        rs = self.select(' '.join(sql), args, size=1)
+        return list(rs[0].values())[0]
+
+    def count(self, **pks):
         args = {}
         keys = []
 
-        # __count__ = 'select count(1) from %s ' % cls.__table__
-
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
-                args[cls.__get_key_name__(k)] = cls.padding_val_if_neccesary(
-                    v, k)
+                args[self._model.__get_key_name__(
+                    k)] = self._model.padding_val_if_neccesary(v, k)
                 keys.append(k)
 
         where = None
 
         if len(keys) > 0:
-            where = cls.__get_sql_where_con_pairs_list(keys)
+            where = self._model.get_sql_where_con_pairs_list(keys)
 
-        return cls.count_where(where, **args)
+        return self.count_where(where, **args)
 
-    @classmethod
-    def count_where(cls, where=None, **args):
-        # 此函数不会也无法做padding等不全操作
-        sql = [cls.__count__]
-        if where:
-            sql.append('where')
-            sql.append(where)
+    def save(self, obj):
+        assert isinstance(obj, self._model)
+        obj.created_at = datetime.datetime.now()
+        obj.updated_at = datetime.datetime.now()
+        return self.execute(obj.__insert__,
+                            obj.__get_args__(obj.__mappings__.keys()))
 
-        rs = cls.select(' '.join(sql), args, size=1)
-        return list(rs[0].values())[0]
+    def delete(self, obj):
+        assert isinstance(obj, self._model)
+        return self.execute(obj.__delete__, obj.__get_args__(obj.__pKeys__))
 
-
-class Session(object):
-    def __init__(self, *args, **kwargs):
-        return super().__init__(*args, **kwargs)
+    def update(self, obj):
+        assert isinstance(obj, self._model)
+        obj.updated_at = datetime.datetime.now()
+        return self.execute(obj.__update__,
+                            obj.__get_args__(obj.__mappings__.keys()))
