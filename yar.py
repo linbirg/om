@@ -1,8 +1,11 @@
 # !/usr/bin/python3
 # -*- coding:utf-8 -*-
 # Author: yizr
-
-# yom-采用Row Data Gateway模式实现的简单om框架。
+# yar--采用activerecord模式实现的om框架。
+# yar与yom的区别：
+# --yom的db连接由单独的dao保存并记录使用，操作都封装dao曾，model层类似java的pojo，只保留映射。
+# --yar，数据库连接保存在model中，操作也都封装在model中。
+# --yar相比yom，使用起来更方便更易于理解，但是model类封装的更大。model的连接需要全局访问。实现时要么采用全局唯一连接，要么实现统一的连接池管理技术。
 
 # 1.orm 是什么
 #  ORM 即Object Relational Mapping，全称对象关系映射
@@ -113,9 +116,14 @@ class TimeStampField(Field):
                  desc=''):
         super().__init__(name, column_type, primary_key, default, desc)
 
-
 # 其它字段略，一个道理，一个模式
 
+class classproperty:
+    def __init__(self, method):
+        self.method = method
+
+    def __get__(self, instance, owner):
+        return self.method(owner)
 
 class ModelMetaClass(type):
     # 元类必须实现__new__方法，当一个类指定通过某元类来创建，那么就会调用该元类的__new__方法
@@ -215,6 +223,12 @@ class ModelMetaClass(type):
 class Model(dict, metaclass=ModelMetaClass):
     __db_internal_encoding = 'gbk'
 
+    __db_conn = None
+
+    @classproperty
+    def db_conn(cls):
+        return cls.__db_conn
+
     def __init__(self, **kw):
         super().__init__(**kw)
 
@@ -310,21 +324,7 @@ class Model(dict, metaclass=ModelMetaClass):
             map(
                 lambda k: '%s=:%s' % (cls.__get_key_name__(k),
                                       cls.__get_key_name__(k)), cols))
-
-
-class Dao(object):
-    def __init__(self, db_conn, model):
-        assert db_conn
-        assert model
-        self._conn = db_conn
-        self._model = model
-
-    # def commit(self):
-    #     self._conn.commit()
-
-    # def rollback(self):
-    #     self._conn.rollback()
-
+    
     @staticmethod
     def __func_create_row__(cursor):
         # 列名全部小写，保持跟书写习惯一致。取列也已小写方式读取。
@@ -334,9 +334,10 @@ class Dao(object):
             return dict(zip(cols, args))
 
         return createrow
-
-    def select(self, sql, args=None, db_conn=None, size=None):
-        _conn = db_conn if db_conn else self._conn
+    
+    @classmethod
+    def select(cls, sql, args=None, db_conn=None, size=None):
+        _conn = db_conn if db_conn else cls.db_conn
         cur = _conn.cursor()
         if args is None:
             args = {}
@@ -348,7 +349,7 @@ class Dao(object):
                     (id(_conn), sql, args))
 
         cur.execute(sql, args)
-        cur.rowfactory = self.__func_create_row__(cur)
+        cur.rowfactory = cls.__func_create_row__(cur)
         if size:
             rs = cur.fetchmany(size)
         else:
@@ -356,8 +357,13 @@ class Dao(object):
 
         return rs
 
-    def execute(self, sql, args=None, db_conn=None):
-        _conn = db_conn if db_conn else self._conn
+    @classmethod
+    def _raw_to_obj(cls,row):
+        return cls(**cls.row_mapper(row))
+    
+    @classmethod
+    def execute(cls, sql, args=None, db_conn=None):
+        _conn = db_conn if db_conn else cls.db_conn
         cur = _conn.cursor()
         if args is None:
             args = {}
@@ -368,22 +374,21 @@ class Dao(object):
 
         return affected
 
-    def _raw_to_obj(self, raw):
-        return self._model(**self._model.row_mapper(raw))
-
-    def find_where(self, where=None, **args):
+    @classmethod
+    def find_where(cls, where=None, **args):
         # 此函数不会做padding等不全操作
-        sql = [self._model.__select__]
+        sql = [cls.__select__]
         if where:
             sql.append('where')
             sql.append(where)
 
-        rs = self.select(' '.join(sql), args)
+        rs = cls.select(' '.join(sql), args)
         # if len(rs) == 0:
         #     return None
-        return [self._raw_to_obj(r) for r in rs]  # 返回的是一个实例对象引用
-
-    def select_page(self, where=None,order_by=None, first=1, last=10, **args):
+        return [cls._raw_to_obj(r) for r in rs]  # 返回的是一个实例对象引用
+    
+    @classmethod
+    def select_page(cls, where=None,order_by=None, first=1, last=10, **args):
         # 这个SQL参考了
         #  http://www.oracle.com/technetwork/issue-archive/2006/06-sep/o56asktom-086197.html
         #  以及
@@ -394,11 +399,11 @@ class Dao(object):
         # String paginationSearchQuery = "select " + this.sql_allColumnString
         # 		+ " from ( " + searchQuery_rn____
         # 		+ " ) where rn____ >= ? and rownum <= ?"
-        all_columns = self._model.__pKeys__ + self._model.__fields__
-        all_columns_str = self._model.get_sql_cols_list(all_columns)
+        all_columns = cls.__pKeys__ + cls.__fields__
+        all_columns_str = cls.get_sql_cols_list(all_columns)
         where_str = ' where ' + where if where else ''
         order_by_str = 'order by ' + order_by if order_by else ''
-        original_sql = '{0} {1} {2}'.format(self._model.__select__, where_str,order_by_str) 
+        original_sql = '{0} {1} {2}'.format(cls.__select__, where_str,order_by_str) 
         search_qry_rn__ = 'select %s,rownum rn____ from (%s)' % (
             all_columns_str, original_sql)
 
@@ -407,44 +412,47 @@ class Dao(object):
 
         pag_args = {**args, 'first': first, 'last': last}
 
-        rs = self.select(pagination_qry_sql, pag_args)
+        rs = cls.select(pagination_qry_sql, pag_args)
 
-        return [self._raw_to_obj(r) for r in rs]
+        return [cls._raw_to_obj(r) for r in rs]
     
-    def find_page(self,order_by=None, first=1, last=10,  **pks):
+    @classmethod
+    def find_page(cls,order_by=None, first=1, last=10,  **pks):
         '''与select_page的区别是不需要写where条件，只需要写查找等式。'''
         keys = []
         args = {}
         if len(pks) > 0:
             for k, v in pks.items():
-                args[self._model.__get_key_name__(
-                    k)] = self._model.padding_val_if_neccesary(v, k)
+                args[cls.__get_key_name__(
+                    k)] = cls.padding_val_if_neccesary(v, k)
                 keys.append(k)
 
         where = None
         if len(keys) > 0:
-            where = self._model.get_sql_where_con_pairs_list(keys)
-        return self.select_page(where=where,order_by=order_by,first=first,last=last,**args)
+            where = cls.get_sql_where_con_pairs_list(keys)
+        return cls.select_page(where=where,order_by=order_by,first=first,last=last,**args)
 
-    def find(self, **pks):
+    @classmethod
+    def find(cls, **pks):
         keys = []
         args = {}
 
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
-                args[self._model.__get_key_name__(
-                    k)] = self._model.padding_val_if_neccesary(v, k)
+                args[cls.__get_key_name__(
+                    k)] = cls.padding_val_if_neccesary(v, k)
                 keys.append(k)
 
         where = None
         if len(keys) > 0:
-            where = self._model.get_sql_where_con_pairs_list(keys)
+            where = cls.get_sql_where_con_pairs_list(keys)
 
-        return self.find_where(where, **args)
-
-    def find_one(self, **pks):
+        return cls.find_where(where, **args)
+    
+    @classmethod
+    def find_one(cls, **pks):
         '''返回一条数据，如果没有则返回None，多条数据会抛异常.'''
-        rets = self.find(**pks)
+        rets = cls.find(**pks)
         if rets is None or len(rets) == 0:
             return None
 
@@ -453,7 +461,8 @@ class Dao(object):
 
         return rets[0]
     
-    def find_one_with_lock(self, nowait=False,time_out=5,**pks):
+    @classmethod
+    def find_one_with_lock(cls, nowait=False,time_out=5,**pks):
         assert isinstance(time_out,int)
 
         if len(pks) <= 0:
@@ -463,17 +472,17 @@ class Dao(object):
         args = {}
         
         for k, v in pks.items():
-            args[self._model.__get_key_name__(
-                k)] = self._model.padding_val_if_neccesary(v, k)
+            args[cls.__get_key_name__(
+                k)] = cls.padding_val_if_neccesary(v, k)
             keys.append(k)
 
         where = ''
         if len(keys) > 0:
-            where = ' where '+ self._model.get_sql_where_con_pairs_list(keys)
+            where = ' where '+ cls.get_sql_where_con_pairs_list(keys)
         wait_sql = 'nowait' if nowait else 'wait {0}'.format(time_out)
         for_update_sql = 'for update {0}'.format(wait_sql)
-        _lock_sql = '{0} {1} {2}'.format(self._model.__select__,where,for_update_sql)
-        rs = self.select(_lock_sql,args)
+        _lock_sql = '{0} {1} {2}'.format(cls.__select__,where,for_update_sql)
+        rs = cls.select(_lock_sql,args)
 
         if len(rs) > 1:
             raise RuntimeError("find_one_with_lock：应该返回一条数据，但是返回了多条数据。")
@@ -481,54 +490,69 @@ class Dao(object):
         if rs is None or len(rs) == 0:
             return None
         
-        return self._raw_to_obj(rs[0]) 
-
-
-    def find_all(self):
-        return self.find()
-
-    def count_where(self, where=None, **args):
+        return cls._raw_to_obj(rs[0])
+    
+    @classmethod
+    def find_all(cls):
+        return cls.find()
+    
+    @classmethod
+    def count_where(cls, where=None, **args):
         # 此函数不会也无法做padding等不全操作
-        sql = [self._model.__count__]
+        sql = [cls.__count__]
         if where:
             sql.append('where')
             sql.append(where)
 
-        rs = self.select(' '.join(sql), args, size=1)
+        rs = cls.select(' '.join(sql), args, size=1)
         return list(rs[0].values())[0]
-
-    def count(self, **pks):
+    
+    @classmethod
+    def count(cls, **pks):
         args = {}
         keys = []
 
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
-                args[self._model.__get_key_name__(
-                    k)] = self._model.padding_val_if_neccesary(v, k)
+                args[cls.__get_key_name__(
+                    k)] = cls.padding_val_if_neccesary(v, k)
                 keys.append(k)
 
         where = None
 
         if len(keys) > 0:
-            where = self._model.get_sql_where_con_pairs_list(keys)
+            where = cls.get_sql_where_con_pairs_list(keys)
 
-        return self.count_where(where, **args)
+        return cls.count_where(where, **args)
+    
+    def save(self):
+        self.created_at = datetime.datetime.now()
+        self.updated_at = datetime.datetime.now()
+        return self.execute(self.__insert__,
+                            self.__get_args__(self.__mappings__.keys()))
+    
+    def delete(self):
+        return self.execute(self.__delete__, self.__get_args__(self.__pKeys__))
 
-    def save(self, obj):
-        assert isinstance(obj, self._model)
-        obj.created_at = datetime.datetime.now()
-        obj.updated_at = datetime.datetime.now()
-        return self.execute(obj.__insert__,
-                            obj.__get_args__(obj.__mappings__.keys()))
+    def update(self):
+        self.updated_at = datetime.datetime.now()
+        return self.execute(self.__update__,
+                            self.__get_args__(self.__mappings__.keys()))
 
-    def delete(self, obj):
-        assert isinstance(obj, self._model)
-        return self.execute(obj.__delete__, obj.__get_args__(obj.__pKeys__))
+    
 
-    def update(self, obj):
-        assert isinstance(obj, self._model)
-        obj.updated_at = datetime.datetime.now()
-        return self.execute(obj.__update__,
-                            obj.__get_args__(obj.__mappings__.keys()))
+    
+    
+
+
+    
+
+    
+
+    
+
+    
+
+   
 
 
