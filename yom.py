@@ -426,23 +426,23 @@ class Dao(object):
             where = self._model.get_sql_where_con_pairs_list(keys)
         return self.select_page(where=where,order_by=order_by,first=first,last=last,**args)
 
-    def find(self, pk=None, **pks):
+    def find(self, **pks):
         # 如果只有1个主键，可以find('ag(T+D)')或者find(id='ag(T+D)')，
         # 如果有多个key，必须使用find(id='ag(T+D)',market='02')(假设market也是主键)
 
         # pk与pks必须有一个为空
-        if pk is not None and len(pks) > 0:
-            raise RuntimeError("find：参数错误，pk与pks必须有一个为空。")
+        # if pk is not None and len(pks) > 0:
+        #     raise RuntimeError("find：参数错误，pk与pks必须有一个为空。")
 
         keys = []
         args = {}
-        if pk is not None:
-            args = {
-                self._model.__get_key_name__(self._model.__pKeys__[0]):
-                self._model.padding_val_if_neccesary(pk,
-                                                     self._model.__pKeys__[0])
-            }
-            keys.append(self._model.__pKeys__[0])
+        # if pk is not None:
+        #     args = {
+        #         self._model.__get_key_name__(self._model.__pKeys__[0]):
+        #         self._model.padding_val_if_neccesary(pk,
+        #                                              self._model.__pKeys__[0])
+        #     }
+        #     keys.append(self._model.__pKeys__[0])
 
         if pks is not None and len(pks) > 0:
             for k, v in pks.items():
@@ -456,9 +456,9 @@ class Dao(object):
 
         return self.find_where(where, **args)
 
-    def find_one(self, pk=None, **pks):
+    def find_one(self, **pks):
         '''返回一条数据，如果没有则返回None，多条数据会抛异常.'''
-        rets = self.find(pk, **pks)
+        rets = self.find(**pks)
         if rets is None or len(rets) == 0:
             return None
 
@@ -496,7 +496,6 @@ class Dao(object):
             return None
         
         return self._raw_to_obj(rs[0]) 
-
 
 
     def find_all(self):
@@ -545,3 +544,5 @@ class Dao(object):
         obj.updated_at = datetime.datetime.now()
         return self.execute(obj.__update__,
                             obj.__get_args__(obj.__mappings__.keys()))
+
+

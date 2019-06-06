@@ -20,14 +20,22 @@ class classproperty:
         return self.method(owner)
 
 
+class Resource(object):
+    def __init__(self, method, *args, **kwargs):
+        self.method = method
+
+    def __get__(self, instance, owner):
+        return self.method(instance)
+
+
 class Billow:
     _db_conn = 0
 
     _lock = threading.RLock()
 
-    @classproperty
-    def lname(cls):
-        return cls._db_conn
+    @Resource(model=classproperty, db=None)
+    def risk_dao(self):
+        return self._db_conn
 
     @classmethod
     def set_db(cls):
@@ -55,6 +63,7 @@ class TestCasePackageFpOrder(unittest.TestCase):
     def test_class_property(self):
         print(Billow.lname)
 
+    @unittest.skip('')
     def test_class_property_scope(self):
         t1 = threading.Thread(target=set_db_loop)
         t2 = threading.Thread(target=set_db_loop)
@@ -68,6 +77,10 @@ class TestCasePackageFpOrder(unittest.TestCase):
             billow = Billow()
             print(billow.lname)
             time.sleep(0.5)
+
+    def test_resource(self):
+        billow = Billow()
+        print(billow.risk_dao)
 
 
 if __name__ == "__main__":
