@@ -225,12 +225,13 @@ class Model(dict, metaclass=ModelMetaClass):
 
     __db_conn = None
 
-    @classproperty
-    def db_conn(cls):
-        return cls.__db_conn
 
     def __init__(self, **kw):
         super().__init__(**kw)
+
+    @classproperty
+    def db_conn(cls):
+        return cls.__db_conn
 
     # 实现__getattr__与__setattr__方法，可以使引用属性像引用普通字段一样  如self['id']
     def __getattr__(self, key):
@@ -538,6 +539,17 @@ class Model(dict, metaclass=ModelMetaClass):
         self.updated_at = datetime.datetime.now()
         return self.execute(self.__update__,
                             self.__get_args__(self.__mappings__.keys()))
+
+
+class ConnectionManager:
+    def __init__(self):
+        return super().__init__()
+    
+    def conn_of_curr_process(self):
+        return None
+
+    def conn_of_curr_thread(self):
+        return None
 
     
 
