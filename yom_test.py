@@ -56,7 +56,9 @@ class TestCaseYOM(unittest.TestCase):
         self.conn.close()
 
     def get_conn(self):
-        conn = cx.connect('%s/%s@%s' % ('user', 'passwd', 'ip:1521/sid'))
+        conn = cx.connect(
+            '%s/%s@%s' %
+            ('risk_user', 'oracle123!', '180.2.31.130:1521/interdb1'))
         return conn
 
     def test_find(self):

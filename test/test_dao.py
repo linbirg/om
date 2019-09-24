@@ -56,7 +56,7 @@ class TestCasePackageFpOrder(unittest.TestCase):
         for c in clients:
             print(c)
 
-    @unittest.skip('')
+    # @unittest.skip('')
     def test_find_page(self):
         db_conn = cx.connect(
             '%s/%s@%s' % ('risk', 'oracle123!', '180.2.31.130:1521/interdb1'))

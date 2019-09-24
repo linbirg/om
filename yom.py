@@ -532,3 +532,18 @@ class Dao(object):
                             obj.__get_args__(obj.__mappings__.keys()))
 
 
+from contextlib import contextmanager
+
+@contextmanager
+def transcation(db):
+    assert db
+
+    try:
+        yield db
+        db.commit()
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+        pass

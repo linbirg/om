@@ -168,6 +168,7 @@ class TestCasePackageFpOrder(unittest.TestCase):
         dao.update(o)
         db_conn.commit()
 
+    @unittest.skip('')
     def test_find_one_with_lock(self):
         db_conn = cx.connect(
             '%s/%s@%s' % ('risk', 'oracle123!', '180.2.31.130:1521/interdb1'))
