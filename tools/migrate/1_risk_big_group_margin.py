@@ -10,7 +10,7 @@ tool_dir = os.path.dirname(os.path.dirname(__abs_file__))
 code_dir = os.path.dirname(tool_dir)
 sys.path.append(code_dir)
 
-from tools.migrate.rake_migrate import RakeMigrate
+from .rake_migrate import RakeMigrate
 
 from lib import dbutil
 
