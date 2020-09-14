@@ -14,6 +14,6 @@ db_conf = {
         # test
         "pwd": "abc",
         "user": "itl_user",
-        "sid": "127.0.0.1:1521/sgelt1"
+        "sid": "127.0.0.1:1521/orllt1"
     },
 }
